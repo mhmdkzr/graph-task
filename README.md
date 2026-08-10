@@ -76,8 +76,13 @@ linked and depends on nothing at runtime.
 
 ```sh
 docker build -t graph-builder .
-docker run --rm -v "$PWD:/out" graph-builder cp /app/target/x86_64-unknown-linux-musl/release/graph /out/graph
+CID=$(docker create graph-builder /graph)
+docker cp "$CID":/graph ./graph
+docker rm "$CID"
 ```
+
+The final image is `scratch` (just the static binary at `/graph`), so use
+`docker create`/`docker cp` to extract it.
 
 ## Run
 
