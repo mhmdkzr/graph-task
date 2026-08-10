@@ -1,0 +1,17 @@
+[package]
+name = "graph-ebpf"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+graph-common = { path = "../graph-common" }
+
+aya-ebpf = { workspace = true }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "graph"
+path = "src/main.rs"
+test = false
