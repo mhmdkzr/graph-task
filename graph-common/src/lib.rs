@@ -44,16 +44,20 @@ impl FileOp {
 
 /// Event record produced in kernel space and consumed in user space.
 ///
-/// `#[repr(C)]` guarantees both sides agree on the byte layout. The kernel
-/// writes the header fields at their exact offsets and the path buffers are
-/// NUL-terminated strings. Events are emitted only when the complete path
+/// `#[repr(C)]` guarantees both sides agree on the byte layout. The `_pad`
+/// fields make the kernel's alignment padding explicit, so the struct has no
+/// implicit padding and can be freely viewed as bytes via [`bytemuck`]. The
+/// kernel writes the header fields at their exact offsets and the path buffers
+/// are NUL-terminated strings. Events are emitted only when the complete path
 /// fits in the buffer, so a partial path is never mistaken for a real one.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Event {
     pub op: u8,
+    pub _pad: [u8; 3],
     pub pid: u32,
     pub ppid: u32,
+    pub _pad2: [u8; 4],
     pub cgroup_id: u64,
     pub exe_path: [u8; PATH_BUF_SIZE],
     pub file_path: [u8; PATH_BUF_SIZE],
@@ -63,25 +67,12 @@ impl Event {
     pub const SIZE: usize = size_of::<Event>();
 
     pub fn from_bytes(bytes: &[u8]) -> Option<Event> {
-        if bytes.len() != Self::SIZE {
-            return None;
-        }
-        let mut event = Event {
-            op: 0,
-            pid: 0,
-            ppid: 0,
-            cgroup_id: 0,
-            exe_path: [0; PATH_BUF_SIZE],
-            file_path: [0; PATH_BUF_SIZE],
-        };
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                &mut event as *mut Event as *mut u8,
-                Self::SIZE,
-            )
-        };
-        Some(event)
+        bytemuck::try_from_bytes::<Event>(bytes).ok().copied()
+    }
+
+    /// View the event as its exact wire layout.
+    pub fn as_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
     }
 }
 
@@ -144,23 +135,17 @@ mod tests {
 
     #[test]
     fn event_round_trip() {
-        let mut event = Event {
-            op: FileOp::Delete as u8,
-            pid: 4242,
-            ppid: 1,
-            cgroup_id: 0xdead_beef_cafe,
-            exe_path: [0; PATH_BUF_SIZE],
-            file_path: [0; PATH_BUF_SIZE],
-        };
+        let mut event: Event = bytemuck::Zeroable::zeroed();
+        event.op = FileOp::Delete as u8;
+        event.pid = 4242;
+        event.ppid = 1;
+        event.cgroup_id = 0xdead_beef_cafe;
         let exe = b"/usr/bin/touch";
         let file = b"/var/secure/gone";
         event.exe_path[..exe.len()].copy_from_slice(exe);
         event.file_path[..file.len()].copy_from_slice(file);
 
-        let bytes = unsafe {
-            core::slice::from_raw_parts(&event as *const Event as *const u8, Event::SIZE)
-        };
-        let decoded = Event::from_bytes(bytes).unwrap();
+        let decoded = Event::from_bytes(event.as_bytes()).unwrap();
         assert_eq!(decoded, event);
         assert_eq!(decoded.op, FileOp::Delete as u8);
         assert_eq!(decoded.pid, 4242);
